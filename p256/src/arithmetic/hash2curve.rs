@@ -1,5 +1,5 @@
 use super::FieldElement;
-use crate::{AffinePoint, FieldBytes, NistP256, ProjectivePoint, Scalar};
+use crate::{arithmetic::scalar::Scalar, AffinePoint, FieldBytes, NistP256, ProjectivePoint};
 use elliptic_curve::{
     bigint::{ArrayEncoding, U256},
     consts::U48,

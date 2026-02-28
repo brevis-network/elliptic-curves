@@ -39,7 +39,12 @@
 //! # }
 //! ```
 
-pub use ecdsa_core::signature::{self, Error};
+/// patches: re-export ecdsa-core as its our patched version.
+pub use ecdsa_core::{
+    self,
+    signature::{self, Error},
+    RecoveryId,
+};
 
 use super::NistP256;
 

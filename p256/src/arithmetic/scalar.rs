@@ -25,7 +25,7 @@ use elliptic_curve::{
     Curve, ScalarPrimitive,
 };
 
-#[cfg(feature = "bits")]
+#[cfg(all(not(target_os = "zkvm"), feature = "bits"))]
 use {crate::ScalarBits, elliptic_curve::group::ff::PrimeFieldBits};
 
 #[cfg(feature = "serde")]
@@ -130,8 +130,29 @@ impl Scalar {
     }
 
     /// Returns the multiplicative inverse of self, if self is non-zero
+    #[cfg(not(target_os = "zkvm"))]
     pub fn invert(&self) -> CtOption<Self> {
         CtOption::new(self.invert_unchecked(), !self.is_zero())
+    }
+
+    /// Returns the multiplicative inverse of self, if self is non-zero
+    #[cfg(target_os = "zkvm")]
+    pub fn invert(&self) -> CtOption<Self> {
+        // NOTE: we dont care about constant time operations in the vm.
+        if self.is_zero().into() {
+            return CtOption::new(Self::ZERO, Choice::from(0));
+        }
+
+        let res = crate::call_inv_hook(&self.to_bytes(), ORDER_HEX);
+        let res = FieldBytes::from_slice(res.as_slice());
+        let res = Scalar::from_repr(*res).unwrap();
+
+        assert!(
+            &res * self == Self::ONE,
+            "Inv hook returned invalid hint, inv is invalid."
+        );
+
+        CtOption::new(res, Choice::from(1))
     }
 
     /// Returns the multiplicative inverse of self.
@@ -237,6 +258,7 @@ impl Field for Scalar {
     /// Tonelli-Shank's algorithm for q mod 16 = 1
     /// <https://eprint.iacr.org/2012/685.pdf> (page 12, algorithm 5)
     #[allow(clippy::many_single_char_names)]
+    #[cfg(not(target_os = "zkvm"))]
     fn sqrt(&self) -> CtOption<Self> {
         // Note: `pow_vartime` is constant-time with respect to `self`
         let w = self.pow_vartime(&[
@@ -274,6 +296,36 @@ impl Field for Scalar {
         }
 
         CtOption::new(x, x.square().ct_eq(self))
+    }
+
+    #[cfg(target_os = "zkvm")]
+    fn sqrt(&self) -> CtOption<Self> {
+        if self.is_zero().into() {
+            return CtOption::new(Self::ZERO, Choice::from(1));
+        }
+
+        // 7 is a non-quadratic residue for p256 scalar field.
+        #[allow(non_snake_case)]
+        let NQR: Scalar = Scalar::from_u128(7);
+
+        let (status, result) =
+            crate::call_sqrt_hook(&self.to_bytes(), ORDER_HEX, NQR.to_bytes().as_slice());
+        let result = FieldBytes::from_slice(result.as_slice());
+        let result = Scalar::from_repr(*result).unwrap();
+
+        if status == 0 {
+            assert!(
+                result * result == *self * &NQR,
+                "Sqrt hook returned invalid hint, NQR root didnt match."
+            );
+        } else {
+            assert!(
+                result * result == *self,
+                "Sqrt hook returned invalid hint, sqrt is invalid."
+            );
+        }
+
+        CtOption::new(result, Choice::from(status))
     }
 
     fn sqrt_ratio(num: &Self, div: &Self) -> (Choice, Self) {
@@ -314,7 +366,7 @@ impl PrimeField for Scalar {
     }
 }
 
-#[cfg(feature = "bits")]
+#[cfg(all(not(target_os = "zkvm"), feature = "bits"))]
 impl PrimeFieldBits for Scalar {
     #[cfg(target_pointer_width = "32")]
     type ReprBits = [u32; 8];
@@ -509,8 +561,14 @@ impl From<&Scalar> for ScalarPrimitive<NistP256> {
     }
 }
 
+// Note: Youre probably not using secret keys in the VM. so this should be fine.
 impl From<&SecretKey> for Scalar {
+    #[allow(unused_variables)]
     fn from(secret_key: &SecretKey) -> Scalar {
+        #[cfg(target_os = "zkvm")]
+        unimplemented!();
+
+        #[cfg(not(target_os = "zkvm"))]
         *secret_key.to_nonzero_scalar()
     }
 }
@@ -527,7 +585,7 @@ impl From<&Scalar> for U256 {
     }
 }
 
-#[cfg(feature = "bits")]
+#[cfg(all(not(target_os = "zkvm"), feature = "bits"))]
 impl From<&Scalar> for ScalarBits {
     fn from(scalar: &Scalar) -> ScalarBits {
         scalar.0.to_words().into()
@@ -687,7 +745,7 @@ impl ReduceNonZero<U256> for Scalar {
 
 impl Sum for Scalar {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(core::ops::Add::add).unwrap_or(Self::ZERO)
+        iter.reduce(Add::add).unwrap_or(Self::ZERO)
     }
 }
 
@@ -699,7 +757,7 @@ impl<'a> Sum<&'a Scalar> for Scalar {
 
 impl Product for Scalar {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(core::ops::Mul::mul).unwrap_or(Self::ONE)
+        iter.reduce(Mul::mul).unwrap_or(Self::ONE)
     }
 }
 

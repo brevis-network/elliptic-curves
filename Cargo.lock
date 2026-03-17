@@ -845,7 +845,7 @@ dependencies = [
 [[package]]
 name = "pico-patch-libs"
 version = "1.2.2"
-source = "git+https://github.com/brevis-network/pico.git?branch=rv64#e319a3cad27adf56b583f745ab4d6a1ef3e7461d"
+source = "git+https://github.com/brevis-network/pico.git?branch=rv64#6e16422720998c81c88ca2f724581f6c236a9a1a"
 dependencies = [
  "bincode",
  "elliptic-curve",

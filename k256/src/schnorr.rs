@@ -71,6 +71,7 @@ pub use signature::{self, rand_core::CryptoRngCore, Error};
 use crate::{arithmetic::FieldElement, NonZeroScalar};
 use core::fmt;
 use elliptic_curve::subtle::ConstantTimeEq;
+use elliptic_curve::PrimeField;
 use sha2::{Digest, Sha256};
 use signature::Result;
 
@@ -99,7 +100,7 @@ impl Signature {
         let mut ret = [0; Self::BYTE_SIZE];
         let (r_bytes, s_bytes) = ret.split_at_mut(Self::BYTE_SIZE / 2);
         r_bytes.copy_from_slice(&self.r.to_bytes());
-        s_bytes.copy_from_slice(&self.s.to_bytes());
+        s_bytes.copy_from_slice(&self.s.to_repr().as_slice());
         ret
     }
 
@@ -270,7 +271,7 @@ mod tests {
             assert_eq!(sk.verifying_key().to_bytes().as_slice(), &vector.public_key);
 
             let sig = sk
-                .sign_prehash_with_aux_rand(&vector.message, &vector.aux_rand)
+                .sign_raw(&vector.message, &vector.aux_rand)
                 .unwrap_or_else(|_| {
                     panic!(
                         "low-level Schnorr signing failure for index {}",

@@ -1,10 +1,12 @@
 //! Taproot Schnorr verifying key.
 
 use super::{tagged_hash, Signature, CHALLENGE_TAG};
-use crate::{AffinePoint, FieldBytes, ProjectivePoint, PublicKey, Scalar};
+use crate::{
+    arithmetic::FieldElement, AffinePoint, FieldBytes, ProjectivePoint, PublicKey, Scalar,
+};
 use elliptic_curve::{
     bigint::U256,
-    group::prime::PrimeCurveAffine,
+    group::{prime::PrimeCurveAffine, Group},
     ops::{LinearCombination, Reduce},
     point::DecompactPoint,
 };
@@ -32,7 +34,52 @@ impl VerifyingKey {
 
     /// Serialize as bytes.
     pub fn to_bytes(&self) -> FieldBytes {
-        self.as_affine().x.to_bytes()
+        let affine = self.as_affine();
+        let (x, _) = affine.field_elements();
+
+        x.to_bytes()
+    }
+
+    /// Compute Schnorr signature verification.
+    ///
+    /// # ⚠️ Warning
+    ///
+    /// This is a low-level interface intended only for unusual use cases
+    /// involving verifying pre-hashed messages, or "raw" messages where the
+    /// message is not hashed at all prior to being used to generate the
+    /// Schnorr signature.
+    ///
+    /// The preferred interfaces are the [`DigestVerifier`] or [`PrehashVerifier`] traits.
+    pub fn verify_raw(
+        &self,
+        message: &[u8],
+        signature: &Signature,
+    ) -> core::result::Result<(), Error> {
+        let (r, s) = signature.split();
+
+        let e = <Scalar as Reduce<U256>>::reduce_bytes(
+            &tagged_hash(CHALLENGE_TAG)
+                .chain_update(signature.r.to_bytes())
+                .chain_update(self.to_bytes())
+                .chain_update(message)
+                .finalize(),
+        );
+
+        let R = ProjectivePoint::lincomb(
+            &ProjectivePoint::generator(),
+            s,
+            &self.inner.to_projective(),
+            &-e,
+        )
+        .to_affine();
+
+        let (rx, ry) = R.field_elements();
+
+        if R.is_identity().into() || ry.normalize().is_odd().into() || rx.normalize() != *r {
+            return Err(Error::new());
+        }
+
+        Ok(())
     }
 
     /// Parse verifying key from big endian-encoded x-coordinate.
@@ -64,30 +111,7 @@ impl PrehashVerifier<Signature> for VerifyingKey {
         prehash: &[u8],
         signature: &Signature,
     ) -> core::result::Result<(), Error> {
-        let prehash: [u8; 32] = prehash.try_into().map_err(|_| Error::new())?;
-        let (r, s) = signature.split();
-
-        let e = <Scalar as Reduce<U256>>::reduce_bytes(
-            &tagged_hash(CHALLENGE_TAG)
-                .chain_update(signature.r.to_bytes())
-                .chain_update(self.to_bytes())
-                .chain_update(prehash)
-                .finalize(),
-        );
-
-        let R = ProjectivePoint::lincomb(
-            &ProjectivePoint::GENERATOR,
-            s,
-            &self.inner.to_projective(),
-            &-e,
-        )
-        .to_affine();
-
-        if R.is_identity().into() || R.y.normalize().is_odd().into() || R.x.normalize() != *r {
-            return Err(Error::new());
-        }
-
-        Ok(())
+        self.verify_raw(prehash, signature)
     }
 }
 
@@ -129,7 +153,10 @@ impl TryFrom<PublicKey> for VerifyingKey {
     type Error = Error;
 
     fn try_from(public_key: PublicKey) -> Result<VerifyingKey> {
-        if public_key.as_affine().y.normalize().is_even().into() {
+        let affine = public_key.as_affine();
+        let (_, y) = affine.field_elements();
+
+        if y.normalize().is_even().into() {
             Ok(Self { inner: public_key })
         } else {
             Err(Error::new())
